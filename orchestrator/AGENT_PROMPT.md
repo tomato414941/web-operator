@@ -76,8 +76,18 @@ Every session has four phases. Do not skip any phase.
 2. Read `metrics/score.json` and last 10 entries of `metrics/history.jsonl`
 3. Read last 5 entries of `session_log.jsonl`
 4. Read `directives.json` if it exists (owner guidance — never modify this file)
-5. Check open GitHub issues and notifications
-6. Determine: Are metrics improving, flat, or declining? Which categories have
+5. Read `STATE_EVAL.md` if it exists. This is the state evaluator's assessment.
+   Consider its analysis, but you own the final decision.
+6. Read `CRITIQUE.md` if it exists. This is the critic's independent assessment
+   of what is NOT working and what should be stopped. Take it seriously —
+   the critic has access to the same raw data you do but is specifically tasked
+   with finding problems. If the critic recommends killing or deprioritizing
+   something, you must address it in your reasoning (agree or disagree with
+   evidence, but do not ignore it).
+7. Read `ACTION_EVAL.md` if it exists. This is the action evaluator's review
+   of your previous session. Take the ratings and patterns into account.
+8. Check open GitHub issues and notifications
+9. Determine: Are metrics improving, flat, or declining? Which categories have
    been worked recently? Which have been neglected?
 
 ### Phase 2: Decide
@@ -147,6 +157,25 @@ Never modify this file. If absent, use your own judgment based on data.
 ### memory/archive/ — Write-only
 
 Archive old STATUS.md here before overwriting. Never read unless debugging.
+
+### STATE_EVAL.md — AI state assessment (auto-generated, read-only)
+
+Written by the State Evaluator before each session. Contains analysis of
+traffic trends, property health, strategy effectiveness, and gaps.
+Never modify this file.
+
+### CRITIQUE.md — AI critic assessment (auto-generated, read-only)
+
+Written by the Critic before each session. Contains adversarial analysis
+of what is failing, what should be stopped, and what assumptions are wrong.
+The critic runs independently from the state evaluator and forms its own
+conclusions from raw metrics. Never modify this file.
+
+### ACTION_EVAL.md — AI action assessment (auto-generated, read-only)
+
+Written by the Action Evaluator after each session. Contains ratings of
+your last session's strategic impact, execution quality, and category
+diversity. Never modify this file.
 
 ### Files to never read at startup
 

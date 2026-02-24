@@ -11,6 +11,7 @@ mkdir -p "$LOGDIR" "$PROJECT_DIR/workspace"
 
 LOG_BASENAME="$(date +%Y%m%d_%H%M%S)"
 LOG_STATE_EVAL="$LOGDIR/${LOG_BASENAME}_state_eval.log"
+LOG_CRITIC="$LOGDIR/${LOG_BASENAME}_critic.log"
 LOG_ACTOR="$LOGDIR/${LOG_BASENAME}.log"
 LOG_ACTION_EVAL="$LOGDIR/${LOG_BASENAME}_action_eval.log"
 
@@ -22,20 +23,37 @@ EVAL_EXIT=0
 bash "$SCRIPT_DIR/evaluate.sh" || EVAL_EXIT=$?
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Deterministic evaluation finished (exit=$EVAL_EXIT)"
 
-# --- Step 2: State Evaluator ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting State Evaluator"
+# --- Step 2: State Evaluator + Critic (parallel, independent) ---
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting State Evaluator and Critic in parallel"
+
 STATE_EVAL_EXIT=0
 timeout "${STATE_EVAL_TIMEOUT:-30}m" codex exec \
   "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/EVAL_STATE_PROMPT.md")" \
   --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
   --cd "$PROJECT_DIR/workspace" \
-  --json > "$LOG_STATE_EVAL" 2>"$LOG_STATE_EVAL.err" || STATE_EVAL_EXIT=$?
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] State Evaluator finished (exit=$STATE_EVAL_EXIT)"
+  --json > "$LOG_STATE_EVAL" 2>"$LOG_STATE_EVAL.err" || STATE_EVAL_EXIT=$? &
+PID_STATE=$!
 
-if [ "$STATE_EVAL_EXIT" -ne 0 ]; then
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] State Evaluator failed — skipping Actor and Action Evaluator"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+CRITIC_EXIT=0
+timeout "${CRITIC_TIMEOUT:-30}m" codex exec \
+  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/CRITIC_PROMPT.md")" \
+  --dangerously-bypass-approvals-and-sandbox \
+  --skip-git-repo-check \
+  --cd "$PROJECT_DIR/workspace" \
+  --json > "$LOG_CRITIC" 2>"$LOG_CRITIC.err" || CRITIC_EXIT=$? &
+PID_CRITIC=$!
+
+# Wait for both to complete
+wait "$PID_STATE" || STATE_EVAL_EXIT=$?
+wait "$PID_CRITIC" || CRITIC_EXIT=$?
+
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] State Evaluator finished (exit=$STATE_EVAL_EXIT)"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Critic finished (exit=$CRITIC_EXIT)"
+
+if [ "$STATE_EVAL_EXIT" -ne 0 ] && [ "$CRITIC_EXIT" -ne 0 ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Both State Evaluator and Critic failed — skipping Actor"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|critic_exit=$CRITIC_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
   exit 1
 fi
 
@@ -52,7 +70,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Actor finished (exit=$ACTOR_EXIT)"
 
 if [ "$ACTOR_EXIT" -ne 0 ]; then
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Actor failed — skipping Action Evaluator"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|actor_exit=$ACTOR_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|critic_exit=$CRITIC_EXIT|actor_exit=$ACTOR_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
   exit 1
 fi
 
@@ -71,7 +89,7 @@ timeout "${ACTION_EVAL_TIMEOUT:-30}m" codex exec \
   --json > "$LOG_ACTION_EVAL" 2>"$LOG_ACTION_EVAL.err" || ACTION_EVAL_EXIT=$?
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Action Evaluator finished (exit=$ACTION_EVAL_EXIT)"
 
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|finished|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|actor_exit=$ACTOR_EXIT|action_exit=$ACTION_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|finished|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|critic_exit=$CRITIC_EXIT|actor_exit=$ACTOR_EXIT|action_exit=$ACTION_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
 
 # Auto-cleanup: keep only last 30 days of logs
 find "$LOGDIR" -name "*.log" -mtime +30 -delete 2>/dev/null || true
