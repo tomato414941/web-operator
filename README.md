@@ -6,12 +6,13 @@ An AI agent (powered by OpenAI Codex) runs on a server every 3 hours, autonomous
 
 ## How it works
 
-Each session follows a 5-step pipeline:
+Each session follows a multi-agent pipeline with **information isolation** — agents only see what they need:
 
-1. **Deterministic Evaluation** — collects metrics (nginx logs, site health checks) reflecting changes since last session
-2. **State Evaluator + Critic** (parallel) — state evaluator assesses traffic and property health; critic independently identifies what is NOT working and what should be stopped
-3. **Actor** — reads both assessments, decides what to do, and executes (content, infrastructure, SEO, analytics, etc.)
-4. **Action Evaluator** — reviews what the actor did and rates strategic impact
+1. **Deterministic Evaluation** — collects organic referral metrics per property from nginx logs
+2. **State Evaluator + Critic + Demand Analyst** (parallel) — state evaluator assesses property health; critic identifies failures; demand analyst maps where real traffic exists
+3. **Strategist** — reads all three analyses, produces a concrete work order. Cannot see the property list — decides based on demand data only
+4. **Worker** — executes the work order. Follows instructions, does not make strategic decisions
+5. **Action Evaluator** — reviews what the worker did, rates strategic impact and work order compliance
 
 Sessions are scheduled via cron. The agent communicates with the human owner through GitHub Issues.
 
@@ -26,27 +27,30 @@ The agent autonomously acquired a domain and deployed multiple web properties:
 ## Project structure
 
 ```
-orchestrator/          # Session management
-  run.sh               # Entry point (cron, flock for concurrency control)
-  session.sh           # 5-step pipeline
-  config.sh            # Timeout settings
-  evaluate.sh          # Deterministic metrics collection
-  AGENT_PROMPT.md      # Agent instructions
-  EVAL_STATE_PROMPT.md # State evaluator instructions
-  CRITIC_PROMPT.md     # Critic instructions (adversarial review)
-  EVAL_ACTION_PROMPT.md# Action evaluator instructions
-workspace/             # Agent's working directory (on server)
-logs/                  # Session logs (on server)
+orchestrator/            # Session management
+  run.sh                 # Entry point (cron, flock for concurrency control)
+  session.sh             # Multi-agent pipeline
+  config.sh              # Timeout settings
+  evaluate.sh            # Deterministic metrics collection
+  DEMAND_PROMPT.md       # Demand analyst instructions
+  STRATEGIST_PROMPT.md   # Strategist instructions
+  WORKER_PROMPT.md       # Worker instructions
+  EVAL_STATE_PROMPT.md   # State evaluator instructions
+  CRITIC_PROMPT.md       # Critic instructions (adversarial review)
+  EVAL_ACTION_PROMPT.md  # Action evaluator instructions
+workspace/               # Agent's working directory (on server)
+logs/                    # Session logs (on server)
 ```
 
 ## Key design decisions
 
+- **Information isolation** — the strategist cannot see the property list, preventing anchoring to existing properties. It decides based on demand data only
+- **6 AI roles per session** — demand analyst, state evaluator, critic, strategist, worker, action evaluator
+- **Separation of judgment and execution** — strategist decides what to do, worker executes. Worker cannot override strategic constraints
+- **Independent adversarial critic** — runs in parallel, reads only raw data, identifies failures and wasted effort
 - **No persistent process** — cron + flock instead of `while true; sleep`
-- **4 AI roles per session** — state evaluator, critic, actor, action evaluator (separation of concerns)
-- **Independent adversarial critic** — runs in parallel with state evaluator, reads only raw data, identifies failures and wasted effort
-- **Stateless sessions** — agent reads STATUS.md and metrics fresh each time, no carried-over plans
-- **Category diversity rule** — agent must rotate work categories to avoid local optima
-- **Human-in-the-loop via Issues** — agent creates `human-task` issues when it needs human action
+- **Stateless sessions** — agents read metrics fresh each time, no carried-over plans
+- **Human-in-the-loop via Issues** — agents create `human-task` issues when they need human action
 
 ## Related
 
