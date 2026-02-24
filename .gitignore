@@ -1,4 +1,4 @@
 workspace/
-codex/logs/
+logs/
 AGENTS.override.md
 CLAUDE.local.md
