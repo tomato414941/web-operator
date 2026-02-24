@@ -12,12 +12,14 @@ mkdir -p "$LOGDIR" "$PROJECT_DIR/workspace"
 LOG_BASENAME="$(date +%Y%m%d_%H%M%S)"
 LOG_STATE_EVAL="$LOGDIR/${LOG_BASENAME}_state_eval.log"
 LOG_CRITIC="$LOGDIR/${LOG_BASENAME}_critic.log"
-LOG_ACTOR="$LOGDIR/${LOG_BASENAME}.log"
+LOG_DEMAND="$LOGDIR/${LOG_BASENAME}_demand.log"
+LOG_STRATEGIST="$LOGDIR/${LOG_BASENAME}_strategist.log"
+LOG_WORKER="$LOGDIR/${LOG_BASENAME}.log"
 LOG_ACTION_EVAL="$LOGDIR/${LOG_BASENAME}_action_eval.log"
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|started|$LOG_BASENAME" >> "$SESSIONS_LOG"
 
-# --- Step 1: Deterministic Evaluation (pre-session metrics) ---
+# --- Phase 0: Deterministic Evaluation (pre-session metrics) ---
 # Output is captured for prompt injection into all agents
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting deterministic evaluation"
 EVAL_EXIT=0
@@ -28,11 +30,11 @@ METRICS_BLOCK="
 ## Current Metrics (human-defined, deterministic)
 $HUMAN_METRICS"
 
-# --- Step 2: State Evaluator + Critic (parallel, independent) ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting State Evaluator and Critic in parallel"
+# --- Phase 1: State Evaluator + Critic + Demand Analyst (parallel) ---
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Phase 1: State Evaluator, Critic, Demand Analyst in parallel"
 
 STATE_EVAL_EXIT=0
-timeout "${STATE_EVAL_TIMEOUT:-30}m" codex exec \
+timeout "${PHASE1_TIMEOUT:-15}m" codex exec \
   "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/EVAL_STATE_PROMPT.md")$METRICS_BLOCK" \
   --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
@@ -41,7 +43,7 @@ timeout "${STATE_EVAL_TIMEOUT:-30}m" codex exec \
 PID_STATE=$!
 
 CRITIC_EXIT=0
-timeout "${CRITIC_TIMEOUT:-30}m" codex exec \
+timeout "${PHASE1_TIMEOUT:-15}m" codex exec \
   "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/CRITIC_PROMPT.md")$METRICS_BLOCK" \
   --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
@@ -49,44 +51,72 @@ timeout "${CRITIC_TIMEOUT:-30}m" codex exec \
   --json > "$LOG_CRITIC" 2>"$LOG_CRITIC.err" || CRITIC_EXIT=$? &
 PID_CRITIC=$!
 
-# Wait for both to complete
-wait "$PID_STATE" || STATE_EVAL_EXIT=$?
-wait "$PID_CRITIC" || CRITIC_EXIT=$?
-
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] State Evaluator finished (exit=$STATE_EVAL_EXIT)"
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Critic finished (exit=$CRITIC_EXIT)"
-
-if [ "$STATE_EVAL_EXIT" -ne 0 ] && [ "$CRITIC_EXIT" -ne 0 ]; then
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Both State Evaluator and Critic failed — skipping Actor"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|critic_exit=$CRITIC_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
-  exit 1
-fi
-
-# --- Step 3: Actor ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Actor"
-ACTOR_EXIT=0
-timeout "${TIMEOUT:-35}m" codex exec \
-  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/AGENT_PROMPT.md")$METRICS_BLOCK" \
+DEMAND_EXIT=0
+timeout "${PHASE1_TIMEOUT:-15}m" codex exec \
+  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/DEMAND_PROMPT.md")$METRICS_BLOCK" \
   --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
   --cd "$PROJECT_DIR/workspace" \
-  --json > "$LOG_ACTOR" 2>"$LOG_ACTOR.err" || ACTOR_EXIT=$?
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Actor finished (exit=$ACTOR_EXIT)"
+  --json > "$LOG_DEMAND" 2>"$LOG_DEMAND.err" || DEMAND_EXIT=$? &
+PID_DEMAND=$!
 
-if [ "$ACTOR_EXIT" -ne 0 ]; then
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Actor failed — skipping Action Evaluator"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|critic_exit=$CRITIC_EXIT|actor_exit=$ACTOR_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+# Wait for all three to complete
+wait "$PID_STATE" || STATE_EVAL_EXIT=$?
+wait "$PID_CRITIC" || CRITIC_EXIT=$?
+wait "$PID_DEMAND" || DEMAND_EXIT=$?
+
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] State Evaluator finished (exit=$STATE_EVAL_EXIT)"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Critic finished (exit=$CRITIC_EXIT)"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Demand Analyst finished (exit=$DEMAND_EXIT)"
+
+if [ "$STATE_EVAL_EXIT" -ne 0 ] && [ "$CRITIC_EXIT" -ne 0 ] && [ "$DEMAND_EXIT" -ne 0 ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] All Phase 1 agents failed — aborting session"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval=$EVAL_EXIT|state=$STATE_EVAL_EXIT|critic=$CRITIC_EXIT|demand=$DEMAND_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
   exit 1
 fi
 
-# --- Step 4: Action Evaluator ---
+# --- Phase 2: Strategist ---
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Strategist"
+STRATEGIST_EXIT=0
+timeout "${STRATEGIST_TIMEOUT:-10}m" codex exec \
+  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/STRATEGIST_PROMPT.md")$METRICS_BLOCK" \
+  --dangerously-bypass-approvals-and-sandbox \
+  --skip-git-repo-check \
+  --cd "$PROJECT_DIR/workspace" \
+  --json > "$LOG_STRATEGIST" 2>"$LOG_STRATEGIST.err" || STRATEGIST_EXIT=$?
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Strategist finished (exit=$STRATEGIST_EXIT)"
+
+if [ "$STRATEGIST_EXIT" -ne 0 ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Strategist failed — aborting session (no work order)"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval=$EVAL_EXIT|state=$STATE_EVAL_EXIT|critic=$CRITIC_EXIT|demand=$DEMAND_EXIT|strategist=$STRATEGIST_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+  exit 1
+fi
+
+# --- Phase 3: Worker ---
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Worker"
+WORKER_EXIT=0
+timeout "${WORKER_TIMEOUT:-30}m" codex exec \
+  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/WORKER_PROMPT.md")$METRICS_BLOCK" \
+  --dangerously-bypass-approvals-and-sandbox \
+  --skip-git-repo-check \
+  --cd "$PROJECT_DIR/workspace" \
+  --json > "$LOG_WORKER" 2>"$LOG_WORKER.err" || WORKER_EXIT=$?
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Worker finished (exit=$WORKER_EXIT)"
+
+if [ "$WORKER_EXIT" -ne 0 ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Worker failed — skipping Action Evaluator"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval=$EVAL_EXIT|state=$STATE_EVAL_EXIT|critic=$CRITIC_EXIT|demand=$DEMAND_EXIT|strategist=$STRATEGIST_EXIT|worker=$WORKER_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+  exit 1
+fi
+
+# --- Phase 4: Action Evaluator ---
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Action Evaluator"
 ACTION_EVAL_EXIT=0
 source ~/.secrets/openai
 ACTION_EVAL_PROMPT="$(cat "$SCRIPT_DIR/EVAL_ACTION_PROMPT.md")
 
-The actor session log is at: $LOG_ACTOR"
-timeout "${ACTION_EVAL_TIMEOUT:-30}m" codex exec \
+The worker session log is at: $LOG_WORKER"
+timeout "${ACTION_EVAL_TIMEOUT:-15}m" codex exec \
   "$ACTION_EVAL_PROMPT" \
   --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
@@ -94,7 +124,7 @@ timeout "${ACTION_EVAL_TIMEOUT:-30}m" codex exec \
   --json > "$LOG_ACTION_EVAL" 2>"$LOG_ACTION_EVAL.err" || ACTION_EVAL_EXIT=$?
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Action Evaluator finished (exit=$ACTION_EVAL_EXIT)"
 
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|finished|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|critic_exit=$CRITIC_EXIT|actor_exit=$ACTOR_EXIT|action_exit=$ACTION_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|finished|eval=$EVAL_EXIT|state=$STATE_EVAL_EXIT|critic=$CRITIC_EXIT|demand=$DEMAND_EXIT|strategist=$STRATEGIST_EXIT|worker=$WORKER_EXIT|action=$ACTION_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
 
 # Auto-cleanup: keep only last 30 days of logs
 find "$LOGDIR" -name "*.log" -mtime +30 -delete 2>/dev/null || true
