@@ -16,7 +16,13 @@ LOG_ACTION_EVAL="$LOGDIR/${LOG_BASENAME}_action_eval.log"
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|started|$LOG_BASENAME" >> "$SESSIONS_LOG"
 
-# --- Step 1: State Evaluator ---
+# --- Step 1: Deterministic Evaluation (pre-session metrics) ---
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting deterministic evaluation"
+EVAL_EXIT=0
+bash "$SCRIPT_DIR/evaluate.sh" || EVAL_EXIT=$?
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Deterministic evaluation finished (exit=$EVAL_EXIT)"
+
+# --- Step 2: State Evaluator ---
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting State Evaluator"
 STATE_EVAL_EXIT=0
 timeout "${STATE_EVAL_TIMEOUT:-30}m" codex exec \
@@ -29,11 +35,11 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] State Evaluator finished (exit=$STATE_EVA
 
 if [ "$STATE_EVAL_EXIT" -ne 0 ]; then
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] State Evaluator failed — skipping Actor and Action Evaluator"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|state_exit=$STATE_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
   exit 1
 fi
 
-# --- Step 2: Actor ---
+# --- Step 3: Actor ---
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Actor"
 ACTOR_EXIT=0
 timeout "${TIMEOUT:-35}m" codex exec \
@@ -46,15 +52,9 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Actor finished (exit=$ACTOR_EXIT)"
 
 if [ "$ACTOR_EXIT" -ne 0 ]; then
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Actor failed — skipping Action Evaluator"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|state_exit=$STATE_EVAL_EXIT|actor_exit=$ACTOR_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|aborted|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|actor_exit=$ACTOR_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
   exit 1
 fi
-
-# --- Step 3: Deterministic Evaluation ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting deterministic evaluation"
-EVAL_EXIT=0
-bash "$SCRIPT_DIR/evaluate.sh" || EVAL_EXIT=$?
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Deterministic evaluation finished (exit=$EVAL_EXIT)"
 
 # --- Step 4: Action Evaluator ---
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Action Evaluator"
@@ -71,7 +71,7 @@ timeout "${ACTION_EVAL_TIMEOUT:-30}m" codex exec \
   --json > "$LOG_ACTION_EVAL" 2>"$LOG_ACTION_EVAL.err" || ACTION_EVAL_EXIT=$?
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Action Evaluator finished (exit=$ACTION_EVAL_EXIT)"
 
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|finished|state_exit=$STATE_EVAL_EXIT|actor_exit=$ACTOR_EXIT|eval_exit=$EVAL_EXIT|action_exit=$ACTION_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|finished|eval_exit=$EVAL_EXIT|state_exit=$STATE_EVAL_EXIT|actor_exit=$ACTOR_EXIT|action_exit=$ACTION_EVAL_EXIT|$LOG_BASENAME" >> "$SESSIONS_LOG"
 
 # Auto-cleanup: keep only last 30 days of logs
 find "$LOGDIR" -name "*.log" -mtime +30 -delete 2>/dev/null || true
