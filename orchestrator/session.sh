@@ -18,17 +18,22 @@ LOG_ACTION_EVAL="$LOGDIR/${LOG_BASENAME}_action_eval.log"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)|started|$LOG_BASENAME" >> "$SESSIONS_LOG"
 
 # --- Step 1: Deterministic Evaluation (pre-session metrics) ---
+# Output is captured for prompt injection into all agents
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting deterministic evaluation"
 EVAL_EXIT=0
-bash "$SCRIPT_DIR/evaluate.sh" || EVAL_EXIT=$?
+HUMAN_METRICS=$(bash "$SCRIPT_DIR/evaluate.sh") || EVAL_EXIT=$?
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Deterministic evaluation finished (exit=$EVAL_EXIT)"
+
+METRICS_BLOCK="
+## Current Metrics (human-defined, deterministic)
+$HUMAN_METRICS"
 
 # --- Step 2: State Evaluator + Critic (parallel, independent) ---
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting State Evaluator and Critic in parallel"
 
 STATE_EVAL_EXIT=0
 timeout "${STATE_EVAL_TIMEOUT:-30}m" codex exec \
-  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/EVAL_STATE_PROMPT.md")" \
+  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/EVAL_STATE_PROMPT.md")$METRICS_BLOCK" \
   --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
   --cd "$PROJECT_DIR/workspace" \
@@ -37,7 +42,7 @@ PID_STATE=$!
 
 CRITIC_EXIT=0
 timeout "${CRITIC_TIMEOUT:-30}m" codex exec \
-  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/CRITIC_PROMPT.md")" \
+  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/CRITIC_PROMPT.md")$METRICS_BLOCK" \
   --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
   --cd "$PROJECT_DIR/workspace" \
@@ -61,7 +66,7 @@ fi
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Actor"
 ACTOR_EXIT=0
 timeout "${TIMEOUT:-35}m" codex exec \
-  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/AGENT_PROMPT.md")" \
+  "$(cat "$HOME/AGENTS.md" "$SCRIPT_DIR/AGENT_PROMPT.md")$METRICS_BLOCK" \
   --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
   --cd "$PROJECT_DIR/workspace" \
