@@ -8,9 +8,9 @@ An AI agent (powered by OpenAI Codex) runs on a server every 3 hours, autonomous
 
 Each session follows a 4-step pipeline:
 
-1. **State Evaluator** — assesses current traffic, property health, and strategy effectiveness
-2. **Actor** — decides what to do and executes (content, infrastructure, SEO, analytics, etc.)
-3. **Deterministic Evaluation** — collects metrics (nginx logs, site health checks)
+1. **Deterministic Evaluation** — collects metrics (nginx logs, site health checks) reflecting changes since last session
+2. **State Evaluator** — assesses current traffic, property health, and strategy effectiveness
+3. **Actor** — decides what to do and executes (content, infrastructure, SEO, analytics, etc.)
 4. **Action Evaluator** — reviews what the actor did and rates strategic impact
 
 Sessions are scheduled via cron. The agent communicates with the human owner through GitHub Issues.
