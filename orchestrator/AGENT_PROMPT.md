@@ -40,17 +40,24 @@ Act on new comments. Close resolved issues.
 
 ## Metrics
 
-After each session, `evaluate.sh` runs and writes `metrics/score.json`:
-```json
-{
-  "timestamp": "2026-02-09T12:00:00Z",
-  "nginx_requests_24h": 0,
-  "unique_ips_24h": 0,
-  "site_is_live": false
-}
-```
+### Human-defined metrics (primary)
 
-Metrics are also appended to `metrics/history.jsonl` for trend analysis.
+Before each session, `evaluate.sh` runs and its output is injected into this
+prompt as "Current Metrics". These are the primary decision-making input:
+- `organic_non_bot_referrals_24h` — total and per-property breakdown
+- `site_is_live` — health check
+
+**Use these numbers to decide where real demand exists.** Properties with
+zero organic referrals have no demonstrated demand. Properties with high
+organic referrals are where real visitors are coming from. Do not assume
+a property has demand just because it exists.
+
+### Agent-built metrics (supplementary)
+
+You may build and maintain your own analytics tools (e.g., `metrics/score.json`,
+dashboards, scoring scripts). These are supplementary — useful for detailed
+analysis, but the human-defined metrics above take precedence when they
+conflict.
 
 ## Work Categories
 
@@ -95,6 +102,11 @@ Every session has four phases. Do not skip any phase.
 Based on Phase 1 data, choose what to work on this session.
 
 Rules:
+- **Start from demand, not from properties.** Look at the human-defined
+  organic referral numbers first. Ask: "Where are real visitors coming from?
+  What content or tools are they finding useful? What adjacent topics could
+  capture similar demand?" Do not default to iterating on existing properties
+  just because they exist.
 - Check the `primary_category` of the last 2 entries in `session_log.jsonl`.
   If both are the same category, you MUST choose a different primary category.
 - If metrics have been flat or declining for 3+ sessions, change your approach —
@@ -103,7 +115,7 @@ Rules:
 
 ### Phase 3: Execute
 
-Do the work. You have up to 60 minutes — use the time well. A single small
+Do the work. You have up to 35 minutes — use the time well. A single small
 task is not a full session. Aim for substantive progress.
 
 After each significant action, verify it worked (curl the site, check the
