@@ -1,14 +1,20 @@
 #!/bin/bash
-# ASI (Agent Stability Index) - Simplified
+# ASI (Agent Stability Index)
 # Computes behavioral drift metrics from session history.
 # Based on: arxiv.org/abs/2601.04170 (Agent Drift, Rath 2026)
 #
-# 5 dimensions (simplified from 12):
-#   1. Category Diversity  (0.30) — detects fixation
-#   2. Work Order Compliance (0.25) — detects worker rebellion
-#   3. Session Reliability   (0.20) — detects infra issues
-#   4. Output Consistency    (0.15) — detects behavioral instability
-#   5. Metric Trend          (0.10) — detects ineffectiveness
+# 7 dimensions (mapped to paper's 4 categories):
+#   Response Consistency (25%):
+#     1. Category Diversity    (0.15) — detects fixation
+#     2. Output Consistency    (0.10) — detects behavioral instability
+#   Tool Usage Patterns (25%):
+#     3. Tool Selection        (0.15) — detects tool usage drift
+#     4. Tool Sequencing       (0.10) — detects workflow pattern drift
+#   Inter-Agent Coordination (25%):
+#     5. Work Order Compliance (0.15) — detects worker rebellion
+#     6. Session Reliability   (0.10) — detects infra issues
+#   Behavioral Boundaries (25%):
+#     7. Metric Trend          (0.25) — detects ineffectiveness
 #
 # Output: ASI metrics to stdout (for prompt injection)
 # Side effect: appends to asi_history.jsonl
@@ -198,23 +204,195 @@ calc_metric_trend() {
   }'
 }
 
+# --- Helper: list recent worker log files ---
+worker_logs() {
+  find "$LOGDIR" -maxdepth 1 -name '????????_??????.log' \
+    -not -name '*_critic.log' -not -name '*_demand.log' \
+    -not -name '*_strategist.log' -not -name '*_state_eval.log' \
+    -not -name '*_action_eval.log' -not -name 'sessions.log' \
+    -not -name 'cron.log' -not -name 'manual.log' \
+    2>/dev/null | sort | tail -n "$WINDOW"
+}
+
+# --- 6. Tool Selection Stability ---
+# Stability of item.type distribution (reasoning/command_execution/file_change/agent_message)
+# across sessions. Low CV = stable tool mix.
+calc_tool_selection_stability() {
+  local logs
+  logs=$(worker_logs)
+  if [ -z "$logs" ] || [ "$(echo "$logs" | wc -l)" -lt 3 ]; then
+    echo "null"
+    return
+  fi
+
+  # For each log, extract item type counts as "session_id type count" lines
+  local session_data=""
+  local sid=0
+  while IFS= read -r logfile; do
+    sid=$((sid + 1))
+    local counts
+    counts=$(jq -r 'select(.type == "item.completed") | .item.type // "unknown"' "$logfile" 2>/dev/null | sort | uniq -c | awk -v s="$sid" '{print s, $2, $1}')
+    if [ -n "$counts" ]; then
+      session_data="${session_data}${counts}"$'\n'
+    fi
+  done <<< "$logs"
+
+  if [ -z "$session_data" ]; then
+    echo "null"
+    return
+  fi
+
+  echo "$session_data" | awk '
+  NF == 3 {
+    sessions[$1] = 1
+    types[$2] = 1
+    count[$1, $2] = $3
+    total[$1] += $3
+  }
+  END {
+    ns = 0; for (s in sessions) ns++
+    if (ns < 3) { print "null"; exit }
+
+    # Compute proportion of each type per session
+    nt = 0; for (t in types) { type_list[++nt] = t }
+
+    # For each type, compute CV of proportions across sessions
+    sum_cv = 0; n_types = 0
+    for (ti = 1; ti <= nt; ti++) {
+      t = type_list[ti]
+      sum_p = 0; n_s = 0
+      for (s in sessions) {
+        p = (total[s] > 0) ? count[s, t] / total[s] : 0
+        props[++n_s] = p
+        sum_p += p
+      }
+      mean_p = sum_p / n_s
+      if (mean_p < 0.01) continue  # skip rare types
+
+      ss = 0
+      for (i = 1; i <= n_s; i++) ss += (props[i] - mean_p) ^ 2
+      sd = sqrt(ss / n_s)
+      cv = sd / mean_p
+      sum_cv += cv
+      n_types++
+      delete props
+    }
+
+    if (n_types == 0) { print "null"; exit }
+    avg_cv = sum_cv / n_types
+    score = 1 - avg_cv
+    if (score < 0) score = 0
+    if (score > 1) score = 1
+    printf "%.3f\n", score
+  }'
+}
+
+# --- 7. Tool Sequence Consistency ---
+# Stability of item.type transition patterns (bigrams) across sessions.
+# Compares bigram distributions using averaged cosine similarity.
+calc_tool_sequence_consistency() {
+  local logs
+  logs=$(worker_logs)
+  if [ -z "$logs" ] || [ "$(echo "$logs" | wc -l)" -lt 3 ]; then
+    echo "null"
+    return
+  fi
+
+  # For each log, extract bigram counts as "session_id bigram count"
+  local bigram_data=""
+  local sid=0
+  while IFS= read -r logfile; do
+    sid=$((sid + 1))
+    local bigrams
+    bigrams=$(jq -r 'select(.type == "item.completed") | .item.type // "unknown"' "$logfile" 2>/dev/null \
+      | awk 'NR>1 {print prev">"$0} {prev=$0}' \
+      | sort | uniq -c | awk -v s="$sid" '{print s, $2, $1}')
+    if [ -n "$bigrams" ]; then
+      bigram_data="${bigram_data}${bigrams}"$'\n'
+    fi
+  done <<< "$logs"
+
+  if [ -z "$bigram_data" ]; then
+    echo "null"
+    return
+  fi
+
+  echo "$bigram_data" | awk '
+  NF == 3 {
+    sessions[$1] = 1
+    bigrams[$2] = 1
+    count[$1, $2] = $3
+    total[$1] += $3
+  }
+  END {
+    ns = 0; for (s in sessions) { s_list[++ns] = s }
+    if (ns < 3) { print "null"; exit }
+    nb = 0; for (b in bigrams) { b_list[++nb] = b }
+
+    # Compute mean bigram distribution
+    for (bi = 1; bi <= nb; bi++) {
+      b = b_list[bi]
+      s_sum = 0
+      for (si = 1; si <= ns; si++) {
+        s = s_list[si]
+        p = (total[s] > 0) ? count[s, b] / total[s] : 0
+        s_sum += p
+      }
+      mean_dist[b] = s_sum / ns
+    }
+
+    # Compute average cosine similarity of each session to mean
+    sum_cos = 0
+    for (si = 1; si <= ns; si++) {
+      s = s_list[si]
+      dot = 0; mag_s = 0; mag_m = 0
+      for (bi = 1; bi <= nb; bi++) {
+        b = b_list[bi]
+        p_s = (total[s] > 0) ? count[s, b] / total[s] : 0
+        p_m = mean_dist[b]
+        dot += p_s * p_m
+        mag_s += p_s * p_s
+        mag_m += p_m * p_m
+      }
+      mag_s = sqrt(mag_s); mag_m = sqrt(mag_m)
+      cosim = (mag_s > 0 && mag_m > 0) ? dot / (mag_s * mag_m) : 0
+      sum_cos += cosim
+    }
+
+    score = sum_cos / ns
+    if (score < 0) score = 0
+    if (score > 1) score = 1
+    printf "%.3f\n", score
+  }'
+}
+
 # --- Compute all dimensions ---
 D_DIVERSITY=$(calc_category_diversity)
 D_COMPLIANCE=$(calc_work_order_compliance)
 D_RELIABILITY=$(calc_session_reliability)
 D_CONSISTENCY=$(calc_output_consistency)
 D_TREND=$(calc_metric_trend)
+D_TOOL_SELECT=$(calc_tool_selection_stability)
+D_TOOL_SEQ=$(calc_tool_sequence_consistency)
 
 # --- Compute composite ASI ---
+# Weights mapped to paper's 4 categories (each 25%):
+#   Response Consistency: diversity(0.15) + consistency(0.10) = 0.25
+#   Tool Usage Patterns:  tool_select(0.15) + tool_seq(0.10)  = 0.25
+#   Inter-Agent Coord:    compliance(0.15) + reliability(0.10) = 0.25
+#   Behavioral Bounds:    trend(0.25)                          = 0.25
 ASI=$(awk -v d="$D_DIVERSITY" -v c="$D_COMPLIANCE" -v r="$D_RELIABILITY" \
-         -v o="$D_CONSISTENCY" -v t="$D_TREND" '
+         -v o="$D_CONSISTENCY" -v t="$D_TREND" \
+         -v ts="$D_TOOL_SELECT" -v tq="$D_TOOL_SEQ" '
 BEGIN {
   dims = 0; weighted = 0; total_weight = 0
-  if (d != "null") { weighted += 0.30 * d; total_weight += 0.30; dims++ }
-  if (c != "null") { weighted += 0.25 * c; total_weight += 0.25; dims++ }
-  if (r != "null") { weighted += 0.20 * r; total_weight += 0.20; dims++ }
-  if (o != "null") { weighted += 0.15 * o; total_weight += 0.15; dims++ }
-  if (t != "null") { weighted += 0.10 * t; total_weight += 0.10; dims++ }
+  if (d != "null")  { weighted += 0.15 * d;  total_weight += 0.15; dims++ }
+  if (o != "null")  { weighted += 0.10 * o;  total_weight += 0.10; dims++ }
+  if (ts != "null") { weighted += 0.15 * ts; total_weight += 0.15; dims++ }
+  if (tq != "null") { weighted += 0.10 * tq; total_weight += 0.10; dims++ }
+  if (c != "null")  { weighted += 0.15 * c;  total_weight += 0.15; dims++ }
+  if (r != "null")  { weighted += 0.10 * r;  total_weight += 0.10; dims++ }
+  if (t != "null")  { weighted += 0.25 * t;  total_weight += 0.25; dims++ }
 
   if (dims == 0 || total_weight == 0) { print "null"; exit }
   printf "%.3f\n", weighted / total_weight
@@ -237,20 +415,22 @@ cat <<EOF
 agent_stability_index:
   composite: $ASI
   alert: $ALERT
-  dimensions:
+  response_consistency:
     category_diversity: $D_DIVERSITY
+    output_consistency: $D_CONSISTENCY
+  tool_usage_patterns:
+    tool_selection_stability: $D_TOOL_SELECT
+    tool_sequence_consistency: $D_TOOL_SEQ
+  inter_agent_coordination:
     work_order_compliance: $D_COMPLIANCE
     session_reliability: $D_RELIABILITY
-    output_consistency: $D_CONSISTENCY
+  behavioral_boundaries:
     metric_trend: $D_TREND
   window: $WINDOW sessions
-  interpretation:
-    - "1.0 = perfectly stable, 0.0 = severe drift"
-    - "alert levels: none (>=0.8), watch (0.6-0.8), warning (0.4-0.6), critical (<0.4)"
 EOF
 
 # --- Append to history ---
 NULL_SAFE() { if [ "$1" = "null" ]; then echo "null"; else echo "$1"; fi; }
 cat >> "$ASI_HISTORY" <<HIST
-{"timestamp":"$TIMESTAMP","asi":$(NULL_SAFE "$ASI"),"alert":"$ALERT","category_diversity":$(NULL_SAFE "$D_DIVERSITY"),"work_order_compliance":$(NULL_SAFE "$D_COMPLIANCE"),"session_reliability":$(NULL_SAFE "$D_RELIABILITY"),"output_consistency":$(NULL_SAFE "$D_CONSISTENCY"),"metric_trend":$(NULL_SAFE "$D_TREND"),"window":$WINDOW}
+{"timestamp":"$TIMESTAMP","asi":$(NULL_SAFE "$ASI"),"alert":"$ALERT","category_diversity":$(NULL_SAFE "$D_DIVERSITY"),"output_consistency":$(NULL_SAFE "$D_CONSISTENCY"),"tool_selection_stability":$(NULL_SAFE "$D_TOOL_SELECT"),"tool_sequence_consistency":$(NULL_SAFE "$D_TOOL_SEQ"),"work_order_compliance":$(NULL_SAFE "$D_COMPLIANCE"),"session_reliability":$(NULL_SAFE "$D_RELIABILITY"),"metric_trend":$(NULL_SAFE "$D_TREND"),"window":$WINDOW}
 HIST
