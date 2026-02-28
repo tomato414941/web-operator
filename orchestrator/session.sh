@@ -23,9 +23,16 @@ EVAL_EXIT=0
 HUMAN_METRICS=$(bash "$SCRIPT_DIR/evaluate.sh") || EVAL_EXIT=$?
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Deterministic evaluation finished (exit=$EVAL_EXIT)"
 
+# --- Phase 0b: ASI (Agent Stability Index) ---
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Computing ASI metrics"
+ASI_EXIT=0
+ASI_METRICS=$(bash "$SCRIPT_DIR/asi.sh") || ASI_EXIT=$?
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ASI computation finished (exit=$ASI_EXIT)"
+
 METRICS_BLOCK="
 ## Current Metrics (human-defined, deterministic)
-$HUMAN_METRICS"
+$HUMAN_METRICS
+$ASI_METRICS"
 
 # --- Phase 1: Critic + Demand Analyst (parallel) ---
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting Phase 1: Critic, Demand Analyst in parallel"
