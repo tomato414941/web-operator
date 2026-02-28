@@ -156,4 +156,3 @@ Archive old STATUS.md here before overwriting. Never read unless debugging.
 - `memory/archive/` — past states, only for emergency reference
 - `DEMAND.md` — strategist input, not relevant to execution
 - `CRITIQUE.md` — strategist input, not relevant to execution
-- `STATE_EVAL.md` — strategist input, not relevant to execution
