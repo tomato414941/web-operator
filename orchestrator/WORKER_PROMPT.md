@@ -47,13 +47,6 @@ prompt as "Current Metrics". These are the primary success indicators:
 - `organic_non_bot_referrals_24h` — total and per-property breakdown
 - `site_is_live` — health check
 
-### Agent-built metrics (supplementary)
-
-You may build and maintain your own analytics tools (e.g., `metrics/score.json`,
-dashboards, scoring scripts). These are supplementary — useful for detailed
-analysis, but the human-defined metrics above take precedence when they
-conflict.
-
 ## Work Categories
 
 All work falls into one of these categories. Record which category each

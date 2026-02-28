@@ -14,8 +14,7 @@ session history — you do NOT know what properties exist or how they are manage
 ## Read
 
 1. The metrics injected into this prompt (organic referrals per property)
-2. `metrics/human_metrics.jsonl` — historical trend of organic referrals
-3. `session_log.jsonl` — last 10 entries (to understand what approaches were tried)
+2. `session_log.jsonl` — last 10 entries (to understand what approaches were tried)
 
 ## Do NOT Read
 

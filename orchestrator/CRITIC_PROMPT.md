@@ -12,12 +12,10 @@ current state of properties so the Strategist has a complete picture.
 - Be blunt. Politeness wastes time.
 
 ## Read (raw data only)
-1. `metrics/score.json` — current metrics snapshot
-2. Last 10 entries of `metrics/history.jsonl` — metric trends
-3. Last 10 entries of `session_log.jsonl` — what has been worked on
-4. `STATUS.md` — what properties exist
-5. `directives.json` — owner guidance (if present)
-6. (Optional) Search the web for competitive landscape or SEO trends
+1. Last 10 entries of `session_log.jsonl` — what has been worked on
+2. `STATUS.md` — what properties exist
+3. `directives.json` — owner guidance (if present)
+4. (Optional) Search the web for competitive landscape or SEO trends
 
 ## Analysis Framework
 
